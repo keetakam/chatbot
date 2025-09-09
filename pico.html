@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pico Finance Branches</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            background-color: white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #4CAF50;
+            color: white;
+        }
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+        #map {
+            height: 400px;
+            width: 100%;
+            margin-top: 20px;
+            border: 1px solid #ccc;
+        }
+        .search-box {
+            margin-bottom: 20px;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            box-sizing: border-box;
+        }
+    </style>
+    <!-- Leaflet CSS and JS for map (CDN) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="data.js"></script>
+</head>
+<body>
+    <h1>รายชื่อสาขา Pico Finance</h1>
+    <div class="search-box">
+        <input type="text" list="companyList" placeholder="ค้นหาสาขา... (เช่น ชื่อสาขา หรือ จังหวัด)" onkeyup="filterAndSearch()">
+        <datalist id="companyList">
+            <!-- Company names will be populated by JS -->
+        </datalist>
+        <select id="provinceFilter" onchange="filterAndSearch()">
+            <option value="">ทั้งหมด</option>
+            <!-- Provinces will be populated by JS -->
+        </select>
+        <p>จำนวนสาขาทั้งหมด: <span id="totalBranches">0</span> สาขา</p>
+    </div>
+    <!-- เพิ่มตารางสรุปจำนวนสาขาตามจังหวัด -->
+    <div style="margin-bottom: 20px;">
+        <h2>สรุปจำนวนสาขาตามจังหวัด</h2>
+        <table id="summaryTable" style="width: 100%; border-collapse: collapse; background-color: white; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+            <thead>
+                <tr>
+                    <th style="border: 1px solid #ddd; padding: 8px; background-color: #2196F3; color: white;">จังหวัด</th>
+                    <th style="border: 1px solid #ddd; padding: 8px; background-color: #2196F3; color: white;">จำนวนสาขา</th>
+                </tr>
+            </thead>
+            <tbody id="summaryTableBody">
+                <!-- Summary data will be inserted here by JavaScript -->
+            </tbody>
+        </table>
+    </div>
+    <table id="branchesTable">
+        <thead>
+            <tr>
+                <th>ชื่อบริษัท</th>
+                <th>ประเภท</th>
+                <th>จังหวัด</th>
+                <th>ที่อยู่</th>
+                <th>เบอร์โทร</th>
+                <th>พิกัด (ละติจูด, ลองติจูด)</th>
+                <th>วันที่เปิด</th>
+                <th>สถานะ</th>
+                <th>ภูมิภาค</th>
+            </tr>
+        </thead>
+        <tbody id="tableBody">
+            <!-- Data will be inserted here by JavaScript -->
+        </tbody>
+    </table>
+    <div id="map"></div>
+
+    <script>
+        // Load data from data.js
+        let branches = [];
+        let map;
+        let markers = [];
+
+        // Initialize map
+        function initMap() {
+            // กำหนดขอบเขตประเทศไทย
+            const thailandBounds = [[5.5, 97], [20.5, 105.5]];
+            
+            map = L.map('map', {
+                maxBounds: thailandBounds, // จำกัดการแสดงแผนที่ให้อยู่ในประเทศไทย
+                maxBoundsViscosity: 1.0 // ป้องกันการเลื่อนออกนอกขอบเขต
+            }).fitBounds(thailandBounds, {padding: [20, 20]});
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                minZoom: 6, // Zoom ขั้นต่ำ
+                maxZoom: 18 // Zoom สูงสุด
+            }).addTo(map);
+        }
+
+        // Load data when page loads
+        window.onload = function() {
+            branches = data; // Load from data.js
+            document.getElementById('totalBranches').textContent = branches.length;
+            populateProvinces(); // ดึงข้อมูลจังหวัดทันทีที่นี่
+            filterAndSearch(); // เรียกกรองข้อมูลทันทีเพื่อแสดงข้อมูลทั้งหมดและจัดการทุกอย่าง (renderTable, markers, summary)
+        };
+
+        // Populate unique provinces for dropdown
+        function populateProvinces() {
+            const provinceFilter = document.getElementById('provinceFilter');
+            const provinces = [...new Set(branches.map(branch => branch[2] || ''))].sort(); // Get unique provinces
+            provinceFilter.innerHTML = '<option value="">ทั้งหมด</option>';
+            provinces.forEach(province => {
+                if (province) { // Skip empty
+                    const option = document.createElement('option');
+                    option.value = province;
+                    option.textContent = province;
+                    provinceFilter.appendChild(option);
+                }
+            });
+
+            // Populate company names for autocomplete
+            const companyList = document.getElementById('companyList');
+            const companies = [...new Set(branches.map(branch => branch[0] || ''))].sort(); // Get unique company names
+            companies.forEach(company => {
+                if (company) { // Skip empty
+                    const option = document.createElement('option');
+                    option.value = company;
+                    companyList.appendChild(option);
+                }
+            });
+        }
+
+        // สร้างตารางสรุปจำนวนสาขาตามจังหวัด
+        function renderSummaryTable(selectedProvince = null) {
+            const summaryDiv = document.querySelector('div[style*="สรุปจำนวนสาขาตามจังหวัด"]'); // Div ที่มีตารางสรุป
+            const summaryBody = document.getElementById('summaryTableBody');
+            summaryBody.innerHTML = ''; // Clear existing rows
+
+            if (!selectedProvince) {
+                // ซ่อนตารางสรุปเมื่อไม่เลือกจังหวัด
+                if (summaryDiv) summaryDiv.style.display = 'none';
+                return;
+            }
+
+            // แสดงตารางสรุปเฉพาะจังหวัดที่เลือก
+            if (summaryDiv) summaryDiv.style.display = 'block';
+
+            // คำนวณจำนวนสาขาในจังหวัดที่เลือก
+            const provinceCount = branches.filter(branch => (branch[2] || '') === selectedProvince).length;
+
+            // สร้างแถวสรุปสำหรับจังหวัดที่เลือก
+            const row = summaryBody.insertRow();
+            row.insertCell(0).textContent = selectedProvince;
+            row.insertCell(1).textContent = provinceCount;
+        }
+
+        // Render table
+        function renderTable(data) {
+            const tableBody = document.getElementById('tableBody');
+            tableBody.innerHTML = ''; // Clear existing rows
+
+            data.forEach((branch, index) => {
+                // ตรวจสอบข้อมูลพื้นฐานของสาขา
+                if (!branch || branch.length < 9) {
+                    console.warn('ข้อมูลสาขาไม่สมบูรณ์ที่ index:', index, branch);
+                    return; // ข้ามไปสาขาถัดไปหากข้อมูลไม่ครบ
+                }
+
+                const row = tableBody.insertRow();
+                
+                // ดึงข้อมูลที่อยู่และเบอร์โทร (ปกติอยู่ใน array ย่อยที่ index 3)
+                let address = 'N/A';
+                let phone = 'N/A';
+                let coords = null;
+                
+                try {
+                    if (branch[3] && Array.isArray(branch[3]) && branch[3].length > 0) {
+                        const addrInfo = branch[3][0];
+                        if (Array.isArray(addrInfo) && addrInfo.length >= 3) {
+                            address = addrInfo[0] || 'N/A';
+                            phone = addrInfo[1] || 'N/A';
+                            coords = Array.isArray(addrInfo[2]) && addrInfo[2].length === 2 ? addrInfo[2] : null;
+                        }
+                    }
+                } catch (e) {
+                    console.error('เกิดข้อผิดพลาดในการประมวลผลที่อยู่ที่ index:', index, e);
+                }
+
+                row.insertCell(0).textContent = branch[0] || 'N/A'; // Company name
+                row.insertCell(1).textContent = branch[1] || 'N/A'; // Type
+                row.insertCell(2).textContent = branch[2] || 'N/A'; // Province
+                row.insertCell(3).textContent = address; // Address
+                row.insertCell(4).textContent = phone; // Phone
+                row.insertCell(5).textContent = coords ? `${coords[0].toFixed(6)}, ${coords[1].toFixed(6)}` : 'N/A'; // Coordinates
+                row.insertCell(6).textContent = branch[4] || 'N/A'; // Open date
+                row.insertCell(7).textContent = branch[6] || 'N/A'; // Status
+                row.insertCell(8).textContent = branch[8] || 'N/A'; // Region
+
+                // Add click event to row for map zoom (optional)
+                row.onclick = function() {
+                    if (coords) {
+                        map.setView(coords, 15);
+                    } else {
+                        alert('ไม่พบพิกัดสำหรับสาขานี้');
+                    }
+                };
+            });
+        }
+
+        // Add markers to map
+        function addMarkersToMap(data) {
+            markers.forEach(marker => map.removeLayer(marker)); // Clear existing markers
+            markers = [];
+
+            data.forEach((branch, index) => {
+                let coords = null;
+                
+                try {
+                    if (branch[3] && Array.isArray(branch[3]) && branch[3].length > 0) {
+                        const addrInfo = branch[3][0];
+                        if (Array.isArray(addrInfo) && addrInfo.length >= 3) {
+                            coords = Array.isArray(addrInfo[2]) && addrInfo[2].length === 2 ? addrInfo[2] : null;
+                        }
+                    }
+                } catch (e) {
+                    console.error('เกิดข้อผิดพลาดในการดึงพิกัดที่ index:', index, e);
+                }
+
+                if (coords && coords.length === 2) {
+                    const marker = L.marker(coords).addTo(map)
+                        .bindPopup(`<b>${branch[0] || 'N/A'}</b><br>จังหวัด: ${branch[2] || 'N/A'}<br>ที่อยู่: ${branch[3] && branch[3][0] ? branch[3][0][0] : 'N/A'}`);
+                    markers.push(marker);
+                }
+            });
+        }
+
+        // Combined filter and search function
+        function filterAndSearch() {
+            const searchElement = document.querySelector('.search-box input[type="text"]');
+            const searchInput = searchElement ? searchElement.value.toLowerCase() : '';
+            const selectedProvince = document.getElementById('provinceFilter').value;
+            let filteredBranches = branches.filter(branch => {
+                let searchMatch = true;
+                let provinceMatch = true;
+
+                // Search match
+                if (searchInput) {
+                    const branchText = [
+                        branch[0] || '', branch[1] || '', branch[2] || '', 
+                        branch[3] && branch[3][0] ? branch[3][0][0] || '' : '',
+                        branch[3] && branch[3][0] ? branch[3][0][1] || '' : '',
+                        branch[4] || '', branch[6] || '', branch[8] || ''
+                    ].join(' ').toLowerCase();
+                    searchMatch = branchText.indexOf(searchInput) > -1;
+                }
+
+                // Province match
+                if (selectedProvince && (branch[2] || '') !== selectedProvince) {
+                    provinceMatch = false;
+                }
+
+                return searchMatch && provinceMatch;
+            });
+
+            // Update table
+            renderTable(filteredBranches);
+            document.getElementById('totalBranches').textContent = filteredBranches.length;
+
+            // Filter markers on map based on province
+            filterMapMarkers(selectedProvince);
+
+            // อัปเดตตารางสรุปตามจังหวัดที่เลือก
+            renderSummaryTable(selectedProvince);
+        }
+
+        // Filter markers on map
+        function filterMapMarkers(selectedProvince) {
+            markers.forEach(marker => map.removeLayer(marker));
+            markers = [];
+
+            branches.forEach((branch, index) => {
+                // ตรวจสอบว่าจังหวัดตรงกับที่เลือกหรือไม่ (หรือแสดงทั้งหมดหากไม่เลือก)
+                if (!selectedProvince || (branch[2] || '') === selectedProvince) {
+                    let coords = null;
+                    try {
+                        if (branch[3] && Array.isArray(branch[3]) && branch[3].length > 0) {
+                            const addrInfo = branch[3][0];
+                            if (Array.isArray(addrInfo) && addrInfo.length >= 3) {
+                                coords = Array.isArray(addrInfo[2]) && addrInfo[2].length === 2 ? addrInfo[2] : null;
+                            }
+                        }
+                    } catch (e) {
+                        console.error('เกิดข้อผิดพลาดในการดึงพิกัดที่ index:', index, e);
+                    }
+
+                    if (coords && coords.length === 2) {
+                        const marker = L.marker(coords).addTo(map)
+                            .bindPopup(`<b>${branch[0] || 'N/A'}</b><br>จังหวัด: ${branch[2] || 'N/A'}<br>ที่อยู่: ${branch[3] && branch[3][0] ? branch[3][0][0] : 'N/A'}`);
+                        markers.push(marker);
+                    }
+                }
+            });
+        }
+
+        // Initialize map on load
+        initMap();
+    </script>
+</body>
+</html>
